@@ -1,0 +1,393 @@
+---
+title: "Trabajo reglas de asociación"
+author: "Adrián Calzadilla González"
+date: "8/2/2017"
+output: pdf_document
+---
+
+\tableofcontents
+\listoffigures
+\newpage
+
+## Objetivo
+
+El objetivo de esta práctica es realizar un análisis sobre una base de datos (*BD*), en este caso: *movies*, extraida de  *grouplens*[^1] y aplicar técnicas de extracción de reglas de asociación (*RAs*). Tal como se ha realizado en el *laboratorio 1*. Además se ha de añadir el análisis de los ítems del problema negados y se debe realizar un análisis por grupos de las reglas.
+
+[^1]: https://grouplens.org/
+
+## Marco teórico
+
+Las reglas de asociación son una de las técnicas de minería de datos más utilizada para extraer conocimiento interesante a partir de bases de datos grandes.
+
+Son utilizadas para identificar y representar dependencias entre elementos (*ítems*) de una base de datos en la que no se conoce la clase a la que pertenecen los datos.
+
+Es un método de aprendizaje no supervisado.
+
+Para la extracción de reglas se ha utilizado el algoritmo *Apriori*, que se basa en el principio de que si un *itemset* es frecuente todos sus subconjuntos también lo son.
+
+## Materiales
+
+Para realizar la práctica se ha utilizado:
+
+* El lenguaje de programación *R*.
+* Paquete *arules*[^2].
+* El lenguaje de marcado *rmarkdown*.
+* Paquete *arulesViz*[^3]
+* Paquete *pmml*[^4]
+
+[^2]: https://cran.r-project.org/web/packages/arules/index.html
+
+[^3]: https://cran.r-project.org/web/packages/arulesViz/
+
+[^4]: https://cran.r-project.org/web/packages/pmml/index.html
+
+## Procedimiento
+
+### Librería arules
+
+En primer lugar, se ha de descargar y activar la librería *arules*, que proporciona la infraestructura básica para poder extraer y analizar reglas de asociación. Con los siguientes comandos se instala y se carga de la librería:
+
+```{r, message=FALSE, warning=FALSE}
+#install.packages("arules")
+library(arules)
+```
+
+### Lectura de datos
+
+La base de datos se encuentra dividida en tres ficheros:
+
+* *movies.dat*. Aporta el título de la película, el año que se estrenó y el tipo de película que es.
+* *ratings.dat*. En este fichero se encuentra las puntuaciones que los usuarios le han dado a las películas con valores del 1 al 5.
+* *users.dat*. Información sobre el usuario: edad, sexo y ocupación.
+
+Se debe importar los ficheros mencionados a *R* y juntarlos en un sólo *dataset*, en este caso *totalData*.
+
+```{r}
+# Fichero de películas
+movieData <- read.csv2("./ml-1m/movies.dat", sep = ";", header = F)
+names(movieData) <- c("MoviesId", "Title", "Year","Genres")
+head(movieData, n=2)
+
+# Fichero de rating
+ratingsData <- read.csv2("./ml-1m/ratings.dat", sep = ";", header = F)
+names(ratingsData) <- c("UserId", "MoviesId", "Ratings", "Timestamp")
+head(ratingsData, n=2)
+
+# Fichero de usuarios
+usersData <- read.csv2("./ml-1m/users.dat", sep = ";", header = F)
+names(usersData) <- c("UserId", "Gender", "Age" , "Occupation", "Zip-code")
+head(usersData, n=2)
+
+# Juntando los datasets
+totalData <- base::merge(ratingsData, movieData, by="MoviesId")
+totalData <- base::merge(totalData[,2:7], usersData, by="UserId")
+```
+
+## Características del dataset
+
+Una vez construido el *dataset totalData*, se realiza un pequeño estudio para determinar las características importantes de la base de datos.
+
+```{r}
+# Características del dataset
+head(totalData, n=3)
+dim(totalData)
+summary(totalData)
+str(totalData)
+```
+
+### Eliminación de variables
+
+Eliminación de variables *Timestamp* y *Zip-code* ya que no aportan información interesante.
+
+```{r}
+# Instrucciones para Eliminar columnas del dataset
+totalData[["Timestamp"]] = NULL
+totalData[["Zip-code"]] = NULL
+```
+
+### Factorización de variables
+
+Para poder convertir el *dataset* en *transacciones* se deben pasar todas las variables de númericas a categóricas. En este caso, se ha seguido las especificaciones dadas por el fichero *README*, disponible en el *.zip* del *dataset*. Por lo tanto se convierte en factor y se cambian las etiquetas a las variables *Age*  y *Occupation*.
+
+También se factoriza las variables *UserId* y *Ratings*.
+
+```{r}
+#Instrucciones para hacer los cortes:
+totalData$Age <- as.factor(totalData$Age)
+totalData$Age <- factor(totalData$Age, labels = c("Under_18", "18-24", "25-34","35-44",
+                                                  "45-49", "50-55", "56+"))
+summary(totalData$Age)
+
+totalData$Occupation <- as.factor(totalData$Occupation)
+totalData$Occupation <- factor(totalData$Occupation, labels = c("other",
+                                                                   "academic/educator",
+                                                                   "artist",
+                                                                   "clerical/admin",
+                                                                   "college/grad student",
+                                                                   "customer service",
+                                                                   "doctor/health care",
+                                                                   "executive/managerial",
+                                                                   "farmer",
+                                                                   "homemaker",
+                                                                   "K-12 student",
+                                                                   "lawyer",
+                                                                   "programmer",
+                                                                   "retired",
+                                                                   "sales/marketing",
+                                                                   "scientist",
+                                                                   "self-employed",
+                                                                   "technician/engineer",
+                                                                   "tradesman/craftsman",
+                                                                   "unemployed",
+                                                                   "writer"))
+totalData$UserId <- as.factor(totalData$UserId)
+totalData$Ratings <- as.factor(totalData$Ratings)
+```
+
+### Creación de intervalos
+
+Además, la variable *Year* se divide en intervalos para su factorización.
+
+```{r}
+totalData[[ "Year"]] = ordered( cut ( totalData[[ "Year"]],
+                                      c(1918,1929,1939,1949,1959,1969,1979,1989,1999,2000) ) ,
+labels = c ("less30", "30s", "40s", "50s", "60s", "70s", "80s", "90s", "2000s"))
+summary(totalData$Year)
+```
+
+### Negación de variables
+
+Para la realización de los *item negados* se ha seleccionado la variable *Gender* la cuál aporta información sobre el género del usuario.
+
+```{r}
+maleVector <- which(totalData$Gender == "M")
+femaleVector <- which(totalData$Gender == "F")
+
+male <- vector(length = length(totalData$Gender))
+female <- vector(length = length(totalData$Gender))
+male[maleVector] <- T
+female[femaleVector] <- T
+# Se añaden las variables creadas al dataset
+totalData <- cbind(totalData, male)
+totalData <- cbind(totalData, female)
+
+# Una vez añadido las dos variables creadas al dataset, se elimina la variable Gender.
+totalData[["Gender"]] = NULL
+```
+
+## Transacciones
+
+Una vez se ha terminado de preprar el *dataset*, se convierte este en *transacciones*.
+
+```{r}
+# Se comprueba que todos los datos son categóricos
+str(totalData)
+# Convertimos el data.frame en un conjunto de transacciones
+movieTran <- as(totalData, "transactions")
+```
+
+Para ver como ha quedado la *BD* se realiza un *summary*:
+
+```{r}
+summary(movieTran)
+```
+
+### Visualización
+
+Para ver gráficamente que *items* son los más importantes se ejecuta *itemFrequencyPlot* y como parámetro se le pasa el soporte, en este caso de 0.1. Tal como se muestra en la *Figura \ref{fig:plotItems}*.
+
+```{r, fig.cap="Plot de los itemsets más frecuentes\\label{fig:plotItems}"}
+itemFrequencyPlot(movieTran, support = 0.1, cex.names = 0.8)
+```
+
+### Apriori
+
+Se usa *Apriori*, disponible en el paquete *arules*, para encontrar los *itemsets* frecuentes con mínimo soporte de 0.1.
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+# Extraer Itemsets frecuentes
+aprioriMovie <- apriori(movieTran, parameter = list(support = 0.1, target="frequent"))
+```
+
+Se ordenan por el valor del soporte:
+
+```{r}
+aprioriMovie <- sort(aprioriMovie, by="support") # Los ordenamos por el valor del soporte
+```
+
+Se realiza una inspcción de los *itemsets* frecuentes.
+
+```{r}
+inspect(head(aprioriMovie, n=10))
+size(head(aprioriMovie, n=5))
+```
+
+Se muestra el agrupamiento de los *itemsets* por su tamaño, tal como se muestra en la *Figura \ref{fig:itemTam}*.
+
+```{r, fig.cap="Plot donde se agrupan los itemsets por su tamaño \\label{fig:itemTam}"}
+barplot(table(size(aprioriMovie)), xlab="itemset size", ylab="count")
+inspect(head(aprioriMovie[size(aprioriMovie) == 1], n=5))
+```
+
+### Itemsets maximales y cerrados
+
+* *Maximal*: un intemsef frecuente se considera maximal si al añadirle un nuevo elemento deja de ser frecuente.
+* *Cerrado*: itemsets que al añadirle un elemento su soporte baja.
+
+La función *is.maximal* devuelve un vector lógico indicando que *itemsets* es maximal.
+
+```{r}
+# Extraer Itemsets maximales y cerrados
+iMaxMovie <- aprioriMovie[is.maximal(aprioriMovie)]
+inspect(head(sort(iMaxMovie, by="support")))
+```
+
+Para el caso de los cerrados se utiliza la función *is.closed*, que devuelve un vector lógico con los *itemsets* cerrados.
+
+```{r}
+icloMovie <- aprioriMovie[is.closed(aprioriMovie)]
+inspect(head(sort(icloMovie, by="support")))
+```
+
+A continuación se pinta un gráfico de barras para ver la cantidad de de *itemsets* frecuentes, cerrados y maximales que se han generado. El resultado se puede observar en la *Figura \ref{fig:plotFCM}*.
+
+```{r, fig.cap="Plot de los itemsets frecuentes, cerrados y maximales\\label{fig:plotFCM}"}
+barplot( c(frequent=length(aprioriMovie), closed=length(icloMovie), maximal=length(iMaxMovie)),
+         ylab="count", xlab="itemsets")
+```
+
+## Extracción de reglas
+
+Para la extracción de reglas se usa *Apriori* y se le pasa como parámetros el mínimo soporte 0.1 y la confianza 0.3. Tambíen se indica que al menos la longitud de las reglas deba ser 2, antecedente y consecuente.
+
+```{r, message=FALSE, warning=FALSE}
+# Extraer reglas: Apriori
+rules <- apriori(movieTran, parameter = list(support = 0.1, confidence = 0.3, minlen = 2))
+```
+
+Resumen de las reglas obtenidas:
+
+```{r}
+summary(rules)
+```
+
+Se analizan las reglas y la calidad de estas:
+
+```{r}
+inspect(head(rules, n=5))
+quality(head(rules, n=5))
+```
+
+Se ordenan las reglas por el campo que más nos interese. En este caso, ordenaras por el valor de la *lift*.
+
+
+```{r}
+# Ordenar las reglas por el campo que más nos interese.
+rulesSorted <- sort(rules, by = "lift")
+inspect(head(rulesSorted, n=5))
+```
+
+### Estudio de un subconjunto de reglas
+
+Seleccionar un subconjunto de reglas que cumplan la condición de que tenga *lift* mayor que 0.95 y que en el consecuente de la regla tengan el *itemset* *Yeear=90s*.
+
+```{r}
+rulesYears90s <- subset(rules, subset = rhs %in% "Year=90s" & lift > 0.95)
+inspect(head(rulesYears90s, n=5))
+```
+
+## Eliminación de reglas redundantes
+
+Para la eliminación de las reglas redundantes se siguen las siguientes intrucciones:
+
+```{r}
+# Eliminar reglas redundantes
+subsetMatrix <- is.subset(rulesSorted, rulesSorted)
+subsetMatrix[lower.tri(subsetMatrix, diag=T)] <- NA
+redundant <- colSums(subsetMatrix, na.rm=T) >= 1
+rulesPruned <- rulesSorted[!redundant] # remove redundant rules
+inspect(head(rulesPruned, n=5))
+```
+
+## Otras medidas de interés
+
+También se puede calcular para *itemsets* o para reglas otras medidas de calidad utilizando la función *interestMeasure*.
+
+En este caso se va a calcular las medidas:
+
+* *hyperConfidence*.
+* *leverage*.
+* *phi*
+* *gini*
+
+Para las reglas obtenidas y añadir el resultado a la sección *quality* para comparar los valores de las nuevas medidas.
+
+```{r}
+# Medidas de interés adicionales
+mInteres <- interestMeasure(rulesPruned, measure=c("hyperConfidence", "leverage" ,"phi", "gini"),
+                            transactions= movieTran)
+quality(rulesPruned) <- cbind(quality(rulesPruned), mInteres)
+inspect(head(sort(rulesPruned, by="phi"), n=3))
+```
+
+## Visualización con arulesViz
+
+Instalar el paquete *arulesViz* y utilizar las funciones gráficas del paquete
+
+```{r, message=FALSE, warning=FALSE}
+# Visualización (arulesViz)
+# install.packages("arulesViz")
+library (arulesViz)
+```
+
+Utilizar la función *plot* para representar las reglas obtenidas en función de las medidas de calidad, tal como se muestra en la *Figura \ref{fig:scatter}*.
+
+```{r, fig.cap="Plot de todas las reglas usando el paquete arules\\label{fig:scatter}"}
+plot(rules)
+```
+
+### Otros métodos de visualización
+
+En la *Figura \ref{fig:grafo}* se puede observar una representación de las reglas en forma de grafo.
+
+```{r, fig.cap="Plot de las reglas representandolas como un grafo\\label{fig:grafo}"}
+# Otros métodos de visualización
+plot(rules[1:10], method="graph", control=list(type="items"))
+```
+
+Otra forma de representación es como una matriz agrupada, en la *Figura \ref{fig:plotMatriz}* se puede observar el resultado.
+
+```{r, fig.cap="Plot de las reglas en forma de matriz agrupada\\label{fig:plotMatriz}"}
+# reglas como una matriz agrupada
+plot(rules, method="grouped", interactive= F)
+```
+
+## Pasar las reglas a un fichero
+
+Las reglas se pueden guardar en ficheros de texto plano usando la función *write*. En este ejercicio se guardan en el fichero llamado *reglas.csv*, usando como separador la  "*,*" y sin poner ningún nombre a las columnas.
+
+```{r}
+# Escribir fichero
+write(rulesPruned, file="reglas.csv", sep = ",", col.names=NA)
+```
+
+También se puede guardar en formato *PMML* [^5]. Para ello, se tiene que instalar el paquete *pmml*:
+
+[^5]: https://cran.r-project.org/web/packages/pmml/index.html
+
+```{r, message=FALSE, warning=FALSE}
+library(pmml)
+write.PMML(rulesPruned, file="reglas.pmml")
+# leer reglas PMML
+reglasPMML = read.PMML("reglas.pmml")
+```
+
+## Conclusiones
+
+Al examinar las reglas obtenidas, se puede observar que las películas realizadas en los años noventa, identificadas por el *itemset* *Years=90s*, tienen un gran peso sobre las reglas extraidas con un soporte del 0.53. Estas películas tienen una especial acojida sobre los jóvenes con edades comprendidas entre los 18 y los 24 años, tal como se muestra en la regla: "*{Age=18-24} => {Year=90s}*" con un 62% de *confianza* y el valor de *lift* más alto obtenido, 1.17. Además, la regla: "*{Year=90s,male} => {Age=25-34}*" con un valor de *lift* de 1.06 y una *confianza* del 42%, indica que en los varones esta tendencia se extiende hasta los 34 años.
+
+Otra conclusión interesante, es que las películas realizadas en los *80s* tienen una mayor aceptación por parte del público másculino. Este hecho se puede comprobar en la regla "*{Year=80s} => {male}*" con una *confianza* superior al 77% y un *lift* de 1.02.
+
+Por otro lado, los usuarios pertenecientes al género femenino prefieren las películas realizadas en los *90s* con una *confianza* del 55.7% y un *lift* de 1.04, tal como muestra la regla "*{female} => {Year=90s}*".
+
+Hablando de puntuaciones, los varones suelen puntuar con los valores de *Ratings = 3* y *Ratings = 4*. Esta conclusión se puede sacar al analizar las reglas, "*{Ratings=3} => {male}*" y "*{Ratings=4} => {male}*", ambas con una *confianza* mayor del 75% y un *lift* mayor que 0.99. Además se puede afirmar gracias a las reglas "*{Age=25-34} => {male}*" y "*{Ratings=3} => {Age=25-34}*", ambas reglas con un valor de *lift* mayor que 1, que los varones que más puntuan con un *Ratings=3* tienen una edad comprendida entre los 25 y 34 años.
